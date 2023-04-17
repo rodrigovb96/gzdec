@@ -1,0 +1,18 @@
+# autotools generated files
+**/*.cache
+**/*.in
+**/*.m4
+**/*.log
+**/*.status
+configure
+compile
+depcomp
+install-sh
+missing
+config.*
+configure~
+libtool
+ltmain.sh
+ar-lib
+Makefile
+###########
