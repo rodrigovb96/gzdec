@@ -29,12 +29,21 @@
 
 G_BEGIN_DECLS
 
+#define CHUNK 16384
+// Two bytes magic numbers
+// to decide compression method
+enum
+{
+    GZIP = 0x1F | 0x8B,
+    BZIP = 'B' | 'Z',
+};
+
 #define GST_TYPE_GZDEC (gst_gzdec_get_type())
 G_DECLARE_FINAL_TYPE (Gstgzdec, gst_gzdec,
     GST, GZDEC, GstBaseTransform)
 
 struct _Gstgzdec {
-  GstBaseTransform element;
+    GstBaseTransform element;
 
     z_streamp strm;
     gboolean silent;
