@@ -45,23 +45,11 @@
 GST_DEBUG_CATEGORY_STATIC (gst_gzdec_debug);
 #define GST_CAT_DEFAULT gst_gzdec_debug
 
-/* Filter signals and args */
-enum
-{
-  /* FILL ME */
-  LAST_SIGNAL
-};
-
 enum
 {
   PROP_0,
-  PROP_SILENT,
 };
 
-/* the capabilities of the inputs and outputs.
- *
- * FIXME:describe the real formats here.
- */
 static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
@@ -79,11 +67,6 @@ G_DEFINE_TYPE (Gstgzdec, gst_gzdec, GST_TYPE_BASE_TRANSFORM);
 GST_ELEMENT_REGISTER_DEFINE (gzdec, "gzdec", GST_RANK_NONE,
     GST_TYPE_GZDEC);
 
-static void gst_gzdec_set_property (GObject * object,
-    guint prop_id, const GValue * value, GParamSpec * pspec);
-static void gst_gzdec_get_property (GObject * object,
-    guint prop_id, GValue * value, GParamSpec * pspec);
-
 static GstFlowReturn gst_gzdec_transform_ip (GstBaseTransform *
     base, GstBuffer * outbuf);
 
@@ -93,70 +76,35 @@ static GstFlowReturn gst_gzdec_transform_ip (GstBaseTransform *
 static void
 gst_gzdec_class_init (GstgzdecClass * klass)
 {
-  GObjectClass *gobject_class;
-  GstElementClass *gstelement_class;
+    gst_element_class_set_details_simple (gstelement_class,
+        "gzdec",
+        "Filter/Decoder",
+        PLUGIN_DESCRIPTION, "Rodrigo Valente Bernardes rodrigovalente1996@gmail.com");
+  
+    // add our pads
+    gst_element_class_add_pad_template (gstelement_class,
+        gst_static_pad_template_get (&src_template));
+    gst_element_class_add_pad_template (gstelement_class,
+        gst_static_pad_template_get (&sink_template));
 
-  gobject_class = (GObjectClass *) klass;
-  gstelement_class = (GstElementClass *) klass;
+    GST_BASE_TRANSFORM_CLASS (klass)->transform_ip =
+        GST_DEBUG_FUNCPTR (gst_gzdec_transform_ip);
 
-  gobject_class->set_property = gst_gzdec_set_property;
-  gobject_class->get_property = gst_gzdec_get_property;
-
-  g_object_class_install_property (gobject_class, PROP_SILENT,
-      g_param_spec_boolean ("silent", "Silent", "Produce verbose output ?",
-          FALSE, G_PARAM_READWRITE | GST_PARAM_CONTROLLABLE));
-
-  gst_element_class_set_details_simple (gstelement_class,
-      "gzdec",
-      "Generic/Filter",
-      "FIXME:Generic Template Filter", "Rodrigo Valente Bernardes <<user@hostname.org>>");
-
-  gst_element_class_add_pad_template (gstelement_class,
-      gst_static_pad_template_get (&src_template));
-  gst_element_class_add_pad_template (gstelement_class,
-      gst_static_pad_template_get (&sink_template));
-
-  GST_BASE_TRANSFORM_CLASS (klass)->transform_ip =
-      GST_DEBUG_FUNCPTR (gst_gzdec_transform_ip);
-
-  /* debug category for fltering log messages
-   *
-   * FIXME:exchange the string 'Template gzdec' with your description
-   */
-  GST_DEBUG_CATEGORY_INIT (gst_gzdec_debug, "gzdec", 0,
-      "Template gzdec");
+    GST_DEBUG_CATEGORY_INIT (gst_gzdec_debug, "gzdec", 0,
+        PLUGIN_DESCRIPTION);
 }
 
 /* initialize the new element
  * initialize instance structure
  */
 static void
-gst_gzdec_init (Gstgzdec * filter)
-{
-    filter->strm = malloc(sizeof(z_stream));
-    filter->strm->zalloc = Z_NULL;
-    filter->strm->zfree  = Z_NULL;
-    filter->strm->opaque = Z_NULL;
-    int ret = inflateInit(filter->strm);
-    if(ret != Z_OK ) {
-        GST_DEBUG_OBJECT(filter, "inflate returned %d", ret);
-    }
-}
+gst_gzdec_init (Gstgzdec * filter){}
 
 static void
 gst_gzdec_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
   Gstgzdec *filter = GST_GZDEC (object);
-
-  switch (prop_id) {
-    case PROP_SILENT:
-      filter->silent = g_value_get_boolean (value);
-      break;
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-      break;
-  }
 }
 
 static void
@@ -164,49 +112,113 @@ gst_gzdec_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec)
 {
   Gstgzdec *filter = GST_GZDEC (object);
-
-  switch (prop_id) {
-    case PROP_SILENT:
-      g_value_set_boolean (value, filter->silent);
-      break;
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-      break;
-  }
 }
 
-/* GstBaseTransform vmethod implementations */
+static GstFlowReturn
+gzdec_gzip_decompress(Gstgzdec* filter, GstBuffer* outbuf, GstMapInfo *info)
+{
+    z_stream strm;
+    strm.zalloc = Z_NULL;
+    strm.zfree  = Z_NULL;
+    strm.opaque = Z_NULL;
+    strm.next_in= Z_NULL;
+    strm.avail_in = 0;
+    strm.avail_out = 0;
+    strm.next_out = Z_NULL;
+
+    int ret = inflateInit2(&strm, MAX_WBITS + 16);
+    if(ret != Z_OK ) {
+        GST_ERROR("inflateInit2 failed with %s", zError(ret));
+        return GST_FLOW_ERROR;
+    }
+
+    GstMemory * mem = gst_allocator_alloc(NULL, CHUNK, NULL);
+
+    GstMapInfo out;
+    if( !gst_memory_map(mem,&out, GST_MAP_WRITE) ){
+        GST_ERROR("failed to map to memory");
+        return GST_FLOW_ERROR;
+    }
+
+    strm.next_in = (Bytef*) info->data;
+    strm.avail_in = (uInt) info->size;
+    GST_DEBUG("decompressing %ld bytes", info->size);
+
+    // reset the buffer
+    gst_buffer_memset(outbuf, 0, 0, info->size);
+    int idx = 0;
+    do{
+        do{
+            strm.avail_out = CHUNK;
+            strm.next_out = (Bytef*) out.data;
+            // get the data til there's none more left
+            GST_DEBUG("avail_out:%d before inflate", strm.avail_out);
+            ret = inflate(&strm, Z_NO_FLUSH);
+            GST_DEBUG("inflate ret:%s avail_out:%d", zError(ret), strm.avail_out);
+            switch (ret) {
+            case Z_NEED_DICT:
+                ret = Z_DATA_ERROR;
+            case Z_DATA_ERROR:
+            case Z_MEM_ERROR:
+                GST_ERROR("inflate failed with %s", zError(ret));
+                (void)inflateEnd(&strm);
+                return GST_FLOW_ERROR;
+            }
+            // append the memory to result buffer
+            gst_buffer_insert_memory(outbuf, idx, mem);
+            idx += CHUNK - strm.avail_out;
+        }while(strm.avail_out == 0);
+    }while(ret != Z_STREAM_END);
+    (void)inflateEnd(&strm);
+
+    // re-adjust the buffer size after the appends
+    gst_buffer_set_size(outbuf, idx);
+    gst_memory_unmap(mem, &out);
+
+    return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+gzdec_bzip_decompress(Gstgzdec* filter, GstBuffer* outbuf, GstMapInfo *info)
+{
+}
 
 static GstFlowReturn
 gst_gzdec_transform_ip (GstBaseTransform * base, GstBuffer * outbuf)
 {
     Gstgzdec *filter = GST_GZDEC (base);
 
+    GST_DEBUG("transform ip");
+
     if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_TIMESTAMP (outbuf)))
         gst_object_sync_values (GST_OBJECT (filter), GST_BUFFER_TIMESTAMP (outbuf));
 
-    GstMapInfo info;
-    if( !gst_buffer_map(outbuf, &info, GST_MAP_WRITE)) {
-        // TODO log err
+    GstMapInfo in;
+    if( !gst_buffer_map(outbuf, &in, GST_MAP_READ) ) {
+        GST_ERROR("FAILED TO MAP BUFFER INFO");
         return GST_FLOW_ERROR;
     }
 
-    filter->strm->next_in = filter->strm->next_out = info.data;
-    filter->strm->avail_in = filter->strm->avail_out = info.size;
-
-    int ret =inflate(filter->strm, Z_FINISH);
-    switch ( ret )
-    {
-    case Z_STREAM_END:
-        return GST_FLOW_OK;
-    case Z_OK:
-    case Z_DATA_ERROR:
-        GST_DEBUG_OBJECT(filter, "inflate returned %d", ret);
-    default:
-        break;
+    GstFlowReturn ret = GST_FLOW_OK;
+    // decide wether or not we should decompress and which type we should use if needed
+    if(in.data && in.size >= 2){
+        // look for the header and the magic number
+        switch((in.data[0] | in.data[1])){
+        case GZIP:
+            GST_INFO("decoding GZIP");
+            ret = gzdec_gzip_decompress(filter, outbuf, &in);
+            break;
+        case BZIP:
+            GST_INFO("decoding BZIP");
+            ret = gzdec_bzip_decompress(filter, outbuf, &in);
+            break;
+        default: // not covered, assume it's not compressed
+        }
     }
 
-  return GST_FLOW_OK;
+    gst_buffer_unmap(outbuf, &in);
+
+    return ret;
 }
 
 /* entry point to initialize the plug-in
@@ -219,10 +231,6 @@ gzdec_init (GstPlugin * gzdec)
   return GST_ELEMENT_REGISTER (gzdec, gzdec);
 }
 
-/* gstreamer looks for this structure to register gzdecs
- *
- * FIXME:exchange the string 'Template gzdec' with you gzdec description
- */
 GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
     gzdec,

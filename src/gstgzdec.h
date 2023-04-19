@@ -44,9 +44,7 @@ G_DECLARE_FINAL_TYPE (Gstgzdec, gst_gzdec,
 
 struct _Gstgzdec {
     GstBaseTransform element;
-
     z_streamp strm;
-    gboolean silent;
 };
 
 G_END_DECLS
