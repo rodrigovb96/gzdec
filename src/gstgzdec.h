@@ -1,7 +1,5 @@
 /* 
  * GStreamer
- * Copyright (C) 2006 Stefan Kost <ensonic@users.sf.net>
- * Copyright (C) 2020 Niels De Graef <niels.degraef@gmail.com>
  * Copyright (C) 2023 Rodrigo Valente Bernardes <<user@hostname.org>>
  *
  * This library is free software; you can redistribute it and/or
@@ -26,14 +24,18 @@
 #include <gst/gst.h>
 #include <gst/base/gstbasetransform.h>
 #include <zlib.h>
+#include <bzlib.h>
 
 G_BEGIN_DECLS
 
-#define CHUNK 16384
+#define DECOMPRESS_FUN(name) int(*name)(Gstgzdec*, guint8*, gsize)
+
+#define CHUNK 131072  // 128k
 // Two bytes magic numbers
 // to decide compression method
 enum
 {
+    NONE = 0,
     GZIP = 0x1F | 0x8B,
     BZIP = 'B' | 'Z',
 };
@@ -44,7 +46,13 @@ G_DECLARE_FINAL_TYPE (Gstgzdec, gst_gzdec,
 
 struct _Gstgzdec {
     GstBaseTransform element;
-    z_streamp strm;
+
+    guint decoder_type;
+
+    z_streamp zstrm;
+
+    gpointer dec_bytes_buf;
+    gsize    dec_bytes_buf_size;
 };
 
 G_END_DECLS

@@ -15,4 +15,11 @@ libtool
 ltmain.sh
 ar-lib
 Makefile
+**/*.so*
+**/*.la
+**/*.lo
+**/*.o
+**/*.a
+**/*.lai
+**/*.Plo
 ###########
