@@ -22,9 +22,11 @@ there are different ways of doing this process, using "transform_ip" was a progr
 
 Decode Flow:
 ```
-[Buffer(X bytes)] ---> [GZDEC] -- <Is first buffer?>---No--->[Decode] -->[Append N Bytes(internal buff)] ---> [Send first X bytes downstream]
-                                        | yes                /\
-                              [Decides the format] __________/
+[Buffer(X bytes)] ---> [GZDEC] -- <Is first buffer?>---No--->[Decode]--->[Append N Bytes(internal buff)]----> [Send X bytes downstream]
+                                        | yes                /\                                               /\
+                              [Decides the format] __________/                                                /
+                                       \                                                                     /
+                                        `---------- <If not compressed>-------------------------------------´
 ```
 The internal buffer here behaves like a FIFO.
 
