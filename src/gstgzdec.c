@@ -413,15 +413,17 @@ gzdec_bzip_decompress(Gstgzdec* filter, guint8* input, gsize insize)
             return ret;
         }
 
-        gsize decoded_bytes = CHUNK - strm->avail_out;
+        gsize decoded_bytes = strm->avail_out - (16*1024);
+        GST_DEBUG("dec bytes:%ld", decoded_bytes);
         // save decompressed data to be later sent downstream
         gzdec_store_decoded_bytes(filter, output, decoded_bytes);
 
         consumed = insize - strm->avail_in;
+        GST_DEBUG("decompress ret:%d", ret);
 
     }while(ret != BZ_STREAM_END && strm->avail_in > 0);
+    GST_DEBUG("decompress ret:%d final", ret);
 
-    GST_DEBUG("inflate ret:%d", ret);
     return ret;
 }
 
