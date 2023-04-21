@@ -28,6 +28,7 @@
 
 G_BEGIN_DECLS
 
+// a decompress function definition
 #define DECOMPRESS_FUN(name) int(*name)(Gstgzdec*, guint8*, gsize)
 
 #define CHUNK 262144 // 256k

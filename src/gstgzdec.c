@@ -157,7 +157,7 @@ gst_gzdec_sink_event(GstBaseTransform *trans, GstEvent *event){
     default:
         break;
     }
-    GST_INFO("calling upstream sink_event");
+    GST_INFO("calling parent sink_event");
     return GST_BASE_TRANSFORM_CLASS(gst_gzdec_parent_class)->sink_event(trans, event);
 }
 
@@ -215,8 +215,9 @@ gst_gzdec_transform_ip (GstBaseTransform * base, GstBuffer * outbuf)
         GST_INFO("data is neither GZIP nor BZIP, ignoring by passing it through");
     }
 
+    int ret =0;
     if(decompress) {
-        int ret = decompress(filter, in.data, in.size);
+        ret = decompress(filter, in.data, in.size);
 
         gzdec_send_decoded_bytes(filter, in.data, in.size);
 
@@ -224,9 +225,11 @@ gst_gzdec_transform_ip (GstBaseTransform * base, GstBuffer * outbuf)
     }
 
     gst_buffer_unmap(outbuf, &in);
-    return GST_FLOW_OK;
+    return gzdec_get_flow_return(filter, ret);
 }
 
+// called after receiving EOS event
+// drain our internal buffer
 static void
 gzdec_push_drain(Gstgzdec * filter) {
     if(filter->dec_buf_size){
@@ -256,6 +259,9 @@ gzdec_push_drain(Gstgzdec * filter) {
     (void)inflateEnd(&filter->zstrm);
 }
 
+// helper function to map the return of decompress to GstFlowReturn
+// @param filter: the gzdec filter
+// @param ret: return of decompress
 static GstFlowReturn
 gzdec_get_flow_return(Gstgzdec * filter, int ret)
 {
@@ -284,7 +290,7 @@ gzdec_get_flow_return(Gstgzdec * filter, int ret)
         }
     }
     default:
-        return GST_FLOW_ERROR;
+        return GST_FLOW_OK;
     }
 }
 
@@ -375,13 +381,18 @@ gzdec_gzip_decompress(Gstgzdec* filter, guint8* input, gsize insize)
         if(decoded_bytes) gzdec_store_decoded_bytes(filter, output, decoded_bytes);
         input_idx = insize - strm->avail_in;
 
-    }while(ret != BZ_STREAM_END && strm->avail_in > 0);
+    }while(ret != Z_STREAM_END && strm->avail_in > 0);
 
     GST_DEBUG("inflate ret(%d):\"%s\"", ret, zError(ret));
 
     return ret;
 }
 
+// do BZIP decompression
+// and saves the decoded bytes for later send
+// @param filter: filter itself
+// @param data: input buffer
+// @param size: input buffer size
 static int
 gzdec_bzip_decompress(Gstgzdec* filter, guint8* input, gsize insize)
 {
