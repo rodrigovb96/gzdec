@@ -27,3 +27,15 @@ there are different ways of doing this process, using "transform_ip" was a progr
 ./configure && \
 make
 ```
+
+## TODO & Caveats
+
+here is a list of somethings that the I would want to add to this project:
+
+1. Unit testing
+    this was not possible to be done in the development time given the time that
+    I took to understand the decompression libraries, and also doing refinement
+
+2. Bzip decompression seems quite off
+    even though reading and using the bzip2 manual the decompressed size seems to be wrong,
+    ``` CHUNK - strm->avail_out ``` is a lot bigger than expected, adding garbage to the result.
