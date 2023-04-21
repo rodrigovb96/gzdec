@@ -123,23 +123,25 @@ gst_gzdec_class_init (GstgzdecClass * klass)
  */
 static void
 gst_gzdec_init (Gstgzdec * filter){
-    filter->zstrm = malloc(sizeof(z_stream));
-    filter->zstrm->zalloc = Z_NULL;
-    filter->zstrm->zfree  = Z_NULL;
-    filter->zstrm->opaque = Z_NULL;
-    filter->zstrm->next_in= Z_NULL;
-    filter->zstrm->avail_in = 0;
-    filter->zstrm->avail_out = 0;
-    filter->zstrm->next_out = Z_NULL;
+    filter->zstrm.zalloc = Z_NULL;
+    filter->zstrm.zfree  = Z_NULL;
+    filter->zstrm.opaque = Z_NULL;
+    filter->zstrm.next_in= Z_NULL;
+    filter->zstrm.avail_in = 0;
+    filter->zstrm.avail_out = 0;
+    filter->zstrm.next_out = Z_NULL;
 
-    int ret = inflateInit2(filter->zstrm, MAX_WBITS + 16);
-    if(ret != Z_OK ) {
-        GST_ERROR("inflateInit2 failed with %s", zError(ret));
-    }
+    filter->bstrm.bzalloc = NULL;
+    filter->bstrm.bzfree  = NULL;
+    filter->bstrm.opaque = NULL;
+    filter->bstrm.next_in= NULL;
+    filter->bstrm.avail_in = 0;
+    filter->bstrm.avail_out = 0;
+    filter->bstrm.next_out = NULL;
 
     filter->decoder_type = NONE;
-    filter->dec_bytes_buf = NULL;
-    filter->dec_bytes_buf_size = 0;
+    filter->dec_buf = NULL;
+    filter->dec_buf_size = 0;
 }
 
 static gboolean
@@ -155,6 +157,7 @@ gst_gzdec_sink_event(GstBaseTransform *trans, GstEvent *event){
     default:
         break;
     }
+    GST_INFO("calling upstream sink_event");
     return GST_BASE_TRANSFORM_CLASS(gst_gzdec_parent_class)->sink_event(trans, event);
 }
 
@@ -163,8 +166,6 @@ static GstFlowReturn
 gst_gzdec_transform_ip (GstBaseTransform * base, GstBuffer * outbuf)
 {
     Gstgzdec *filter = GST_GZDEC (base);
-
-    GST_DEBUG("transform ip");
 
     if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_TIMESTAMP (outbuf)))
         gst_object_sync_values (GST_OBJECT (filter), GST_BUFFER_TIMESTAMP (outbuf));
@@ -176,20 +177,39 @@ gst_gzdec_transform_ip (GstBaseTransform * base, GstBuffer * outbuf)
     }
 
     DECOMPRESS_FUN(decompress) = NULL;
+
+    gboolean do_init = FALSE;
     // decide wether or not we should decompress and which type we should use if needed
     if(filter->decoder_type == NONE && in.data && in.size >= 2){
         // look for the header and the magic number
         filter->decoder_type = in.data[0] | in.data[1];
+        do_init = TRUE;
     }
 
     switch(filter->decoder_type){
     case GZIP:
-        GST_INFO("decoding GZIP");
         decompress = gzdec_gzip_decompress;
+
+        if(do_init){
+            GST_DEBUG("decoding GZIP");
+            int ret = inflateInit2(&filter->zstrm, MAX_WBITS + 16);
+            if(ret != Z_OK ) {
+                GST_ERROR("failed to init gzip decompress! reason: %s", zError(ret));
+                return GST_FLOW_ERROR;
+            }
+        }
         break;
     case BZIP:
-        GST_INFO("decoding BZIP");
-        //decompress = gzdec_bzip_decompress;
+        decompress = gzdec_bzip_decompress;
+
+        if(do_init) {
+            GST_DEBUG("decoding BZIP");
+            int ret = BZ2_bzDecompressInit(&filter->bstrm, 0 /*verbosity*/, 0 /*small*/);
+            if(ret != BZ_OK ) {
+                GST_ERROR("failed to init bzip decompress! reason: %s", zError(ret));
+                return GST_FLOW_ERROR;
+            }
+        }
         break;
     default: // not covered, assume it's not compressed
         GST_INFO("data is neither GZIP nor BZIP, ignoring by passing it through");
@@ -200,7 +220,7 @@ gst_gzdec_transform_ip (GstBaseTransform * base, GstBuffer * outbuf)
 
         gzdec_send_decoded_bytes(filter, in.data, in.size);
 
-        GST_DEBUG("finished decompressing buffer, %ld bytes remaining", filter->dec_bytes_buf_size);
+        GST_DEBUG("finished decompressing buffer, %ld bytes remaining", filter->dec_buf_size);
     }
 
     gst_buffer_unmap(outbuf, &in);
@@ -209,23 +229,31 @@ gst_gzdec_transform_ip (GstBaseTransform * base, GstBuffer * outbuf)
 
 static void
 gzdec_push_drain(Gstgzdec * filter) {
-    if(filter->dec_bytes_buf_size){
-        GST_INFO("drain decoded bytes %ld", filter->dec_bytes_buf_size);
-        GstBuffer* buff = gst_buffer_new_allocate(NULL, filter->dec_bytes_buf_size, NULL);
+    if(filter->dec_buf_size){
+        GST_INFO("drain decoded bytes %ld", filter->dec_buf_size);
+        GstBuffer* buff = gst_buffer_new_allocate(NULL, filter->dec_buf_size, NULL);
         GstMapInfo in;
         if( !gst_buffer_map(buff, &in, GST_MAP_WRITE) ) {
             GST_ERROR("FAILED TO MAP BUFFER INFO");
         }
 
-        memmove(in.data, filter->dec_bytes_buf, filter->dec_bytes_buf_size);
+        memmove(in.data, filter->dec_buf, filter->dec_buf_size);
 
         gst_buffer_unmap(buff, &in);
-        gst_buffer_set_size(buff, filter->dec_bytes_buf_size);
+        gst_buffer_set_size(buff, filter->dec_buf_size);
 
         if( gst_pad_push(GST_BASE_TRANSFORM_SRC_PAD(filter), buff) == GST_FLOW_ERROR ){
             GST_ERROR("Failed to push buffer to src pad!");
         }
     }
+    // now that we drained all data, let's free the pointer
+    if(filter->dec_buf) {
+        GST_DEBUG("freeing buffer");
+        g_free(filter->dec_buf);
+    }
+    GST_DEBUG("end filters");
+    //(void)BZ2_bzCompressEnd(&filter->bstrm);
+    (void)inflateEnd(&filter->zstrm);
 }
 
 static GstFlowReturn
@@ -270,11 +298,12 @@ gzdec_send_decoded_bytes(Gstgzdec * filter, guint8 * data, gsize size){
 
     GST_DEBUG("sending %ld bytes", size);
     // copy "in.size" bytes from our buffer of decoded bytes
-    memcpy(data, filter->dec_bytes_buf, size);
+    memcpy(data, filter->dec_buf, size);
 
-    filter->dec_bytes_buf_size -= size;
-    // replace the first "size" batch, a.k.a clear it
-    filter->dec_bytes_buf = memmove(filter->dec_bytes_buf, filter->dec_bytes_buf+size, filter->dec_bytes_buf_size);
+    GST_DEBUG("buf_size %ld -> %ld", filter->dec_buf_size, filter->dec_buf_size - size);
+    filter->dec_buf_size -= size;
+    // replace the first "size" bytes, a.k.a clear it
+    filter->dec_buf = memmove(filter->dec_buf, filter->dec_buf+size, filter->dec_buf_size);
 }
 
 // store decompressed bytes for future flush/send
@@ -286,41 +315,47 @@ gzdec_store_decoded_bytes(Gstgzdec* filter, guint8* decoded, gsize decoded_bytes
 
     GST_DEBUG("storing %ld decompressed bytes", decoded_bytes);
 
-    if(!filter->dec_bytes_buf) {
+    if(!filter->dec_buf) {
         // allocate a buffer
         GST_DEBUG("allocating %ld bytes", decoded_bytes);
-        filter->dec_bytes_buf = g_malloc(decoded_bytes);
+        filter->dec_buf = g_malloc(decoded_bytes);
     }else {
         // reallocate with new size
-        GST_DEBUG("realloc %ld -> %ld bytes", filter->dec_bytes_buf_size, filter->dec_bytes_buf_size + decoded_bytes);
-        filter->dec_bytes_buf = g_realloc(filter->dec_bytes_buf, filter->dec_bytes_buf_size+decoded_bytes);
+        GST_DEBUG("realloc %ld -> %ld bytes", filter->dec_buf_size, filter->dec_buf_size + decoded_bytes);
+        filter->dec_buf = g_realloc(filter->dec_buf, filter->dec_buf_size+decoded_bytes);
     }
 
     // move the remaining bytes to our buffer
-    memmove(filter->dec_bytes_buf + filter->dec_bytes_buf_size, decoded, decoded_bytes);
-    filter->dec_bytes_buf_size += decoded_bytes;
+    memmove(filter->dec_buf + filter->dec_buf_size, decoded, decoded_bytes);
+    filter->dec_buf_size += decoded_bytes;
 }
 
 // do GZIP decompression
+// and saves the decoded bytes for later send
 // @param filter: filter itself
 // @param data: input buffer
 // @param size: input buffer size
 static int
 gzdec_gzip_decompress(Gstgzdec* filter, guint8* input, gsize insize)
 {
-    z_streamp strm = filter->zstrm;
+    z_streamp strm = &filter->zstrm;
 
-    strm->next_in = (Bytef*) input;
     strm->avail_in = (uInt) insize;
-    GST_DEBUG("decompressing %ld bytes", insize);
+    GST_DEBUG("gzip decompressing %ld bytes", insize);
 
-    Bytef output[CHUNK];
-    gsize decoded_bytes = 0;
     int ret = 0;
-    do{
+    int input_idx = 0;
+    {
+
+        strm->next_in = input+input_idx;
+        
+        GST_DEBUG("strm->avail_in %d", strm->avail_in);
+        Bytef output[CHUNK];
+        gsize decoded_bytes = 0;
         strm->next_out = (Bytef*) output;
         strm->avail_out = (uInt) CHUNK;
-        ret = inflate(strm, Z_NO_FLUSH);
+
+        int ret = inflate(strm, Z_NO_FLUSH);
         // check for return errors
         switch (ret) {
         case Z_NEED_DICT:
@@ -338,10 +373,55 @@ gzdec_gzip_decompress(Gstgzdec* filter, guint8* input, gsize insize)
 
         // save decompressed data to be later sent downstream
         if(decoded_bytes) gzdec_store_decoded_bytes(filter, output, decoded_bytes);
+        input_idx = insize - strm->avail_in;
 
-    }while(strm->avail_out == 0);
+    }while(ret != BZ_STREAM_END && strm->avail_in > 0);
+
     GST_DEBUG("inflate ret(%d):\"%s\"", ret, zError(ret));
 
+    return ret;
+}
+
+static int
+gzdec_bzip_decompress(Gstgzdec* filter, guint8* input, gsize insize)
+{
+    bz_stream * strm = &filter->bstrm;
+    GST_DEBUG("bzip decompressing %ld bytes", insize);
+
+    int ret = 0;
+    int consumed = 0;
+    strm->avail_in = (uInt) insize;
+
+    char output[CHUNK];
+
+    do{
+        strm->next_in = input+consumed;
+
+        memset(output, 0, CHUNK);
+
+        strm->next_out = (char*) output;
+        strm->avail_out = CHUNK;
+
+        char * prev = output;
+        ret = BZ2_bzDecompress(strm);
+        // check for return errors
+        switch (ret) {
+        case BZ_PARAM_ERROR:
+        case BZ_DATA_ERROR:
+            GST_ERROR("decompress failed with %d", ret);
+            (void)BZ2_bzCompressEnd(strm);
+            return ret;
+        }
+
+        gsize decoded_bytes = CHUNK - strm->avail_out;
+        // save decompressed data to be later sent downstream
+        gzdec_store_decoded_bytes(filter, output, decoded_bytes);
+
+        consumed = insize - strm->avail_in;
+
+    }while(ret != BZ_STREAM_END && strm->avail_in > 0);
+
+    GST_DEBUG("inflate ret:%d", ret);
     return ret;
 }
 

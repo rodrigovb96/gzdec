@@ -30,7 +30,8 @@ G_BEGIN_DECLS
 
 #define DECOMPRESS_FUN(name) int(*name)(Gstgzdec*, guint8*, gsize)
 
-#define CHUNK 131072  // 128k
+#define CHUNK 262144 // 256k
+
 // Two bytes magic numbers
 // to decide compression method
 enum
@@ -49,10 +50,13 @@ struct _Gstgzdec {
 
     guint decoder_type;
 
-    z_streamp zstrm;
+    z_stream  zstrm;
+    bz_stream bstrm;
 
-    gpointer dec_bytes_buf;
-    gsize    dec_bytes_buf_size;
+    // buffer holding decoded data
+    gpointer dec_buf;
+    // buffer size
+    gsize    dec_buf_size;
 };
 
 G_END_DECLS
