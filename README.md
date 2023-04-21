@@ -20,6 +20,25 @@ in EOS event, draining it downstream.
 
 there are different ways of doing this process, using "transform_ip" was a programmer choice.
 
+Decode Flow:
+```
+[Buffer(X bytes)] ---> [GZDEC] -- <Is first buffer?>---No--->[Decode] -->[Append N Bytes(internal buff)] ---> [Send first X bytes downstream]
+                                        | yes                /\
+                              [Decides the format] __________/
+```
+The internal buffer here behaves like a FIFO.
+
+# System Requirements
+
+This project requires:
+
+* Zlib
+* gstreamer-1.0
+* gstreamer-base-1.0
+
+To be installed in the system, and it won't build otherwise
+
+
 # Building the project
 
 ```bash
